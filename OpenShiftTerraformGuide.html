@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>OpenShift 4.x on vSphere (UPI) - Terraform Guide</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            line-height: 1.6; 
+            color: #333; 
+            max-width: 1000px; 
+            margin: 0 auto; 
+            padding: 20px; 
+            background-color: #fcfcfc;
+        }
+        h1 { color: #005682; text-align: center; border-bottom: 2px solid #005682; padding-bottom: 10px;}
+        h2 { color: #005682; margin-top: 0; }
+        h3 { color: #d63384; margin-top: 20px;}
+        
+        details {
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+        summary {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #005682;
+            padding: 15px;
+            cursor: pointer;
+            background-color: #f1f7fa;
+            border-radius: 5px;
+            list-style: none;
+            display: flex;
+            align-items: center;
+        }
+        summary::-webkit-details-marker { display: none; }
+        summary::before {
+            content: "▶";
+            display: inline-block;
+            width: 20px;
+            font-size: 0.8em;
+            transition: transform 0.2s ease-in-out;
+            color: #d63384;
+        }
+        details[open] summary::before { transform: rotate(90deg); }
+        details[open] summary {
+            border-bottom-left-radius: 0;
+            border-bottom-right-radius: 0;
+            border-bottom: 1px solid #ddd;
+        }
+        .content { padding: 20px; }
+
+        pre { 
+            background: #272822; 
+            color: #f8f8f2;
+            padding: 35px 15px 15px 15px; /* Extra top padding for the copy button */
+            border-radius: 5px; 
+            overflow-x: auto; 
+            font-size: 14px; 
+            border: 1px solid #111; 
+            position: relative; /* Required for absolute positioning of the copy button */
+        }
+        code { font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace; }
+        p code, li code { background: #eee; color: #d63384; padding: 2px 5px; border-radius: 3px; font-size: 0.9em;}
+        .note { background: #e7f3fe; border-left: 6px solid #2196F3; padding: 10px 15px; margin: 15px 0; border-radius: 0 4px 4px 0;}
+        .warning { background: #fff4e5; border-left: 6px solid #ff9800; padding: 10px 15px; margin: 15px 0; border-radius: 0 4px 4px 0;}
+        .section-header { background: #005682; color: white; padding: 12px 20px; border-radius: 5px; margin-top: 40px; margin-bottom: 20px; font-size: 1.3em; font-weight: bold;}
+        table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+        th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+        th { background-color: #f4f4f4; color: #333;}
+        
+        /* Copy Button Styles */
+        .copy-btn {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background: #005682;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            font-family: Arial, sans-serif;
+            transition: background 0.3s;
+        }
+        .copy-btn:hover { background: #003d5c; }
+        .copy-btn.copied { background: #28a745; }
+    </style>
+</head>
+<body>
+
+    <h1>OpenShift 4.x on VMware ESXi 8 via Terraform (UPI)</h1>
+    <p>This comprehensive guide details how to provision an OpenShift 4.x cluster on VMware vSphere using the User-Provisioned Infrastructure (UPI) method with Terraform. It includes Prerequisites (DNS & LB), Shared Modules, Standard/Compact cluster configurations, and access instructions.</p>
+
+    <!-- PART 0: PREREQUISITES -->
+    <div class="section-header">PART 0: Prerequisites - DNS & Load Balancer</div>
+    <p>Before running Terraform, your network must be prepared to route traffic to the OpenShift cluster. OpenShift strictly relies on DNS resolution and an external Load Balancer (like HAProxy, F5, or NGINX) in a UPI deployment.</p>
+
+    <details open>
+        <summary>0.1 Load Balancer Configuration</summary>
+        <div class="content">
+            <p>Your Load Balancer must listen on specific ports and forward traffic to the corresponding nodes. <strong>Note:</strong> The Bootstrap node should only be included in the LB pools during the installation phase. Once the cluster is up, it is removed.</p>
+            <table>
+                <tr>
+                    <th>Port</th>
+                    <th>Protocol</th>
+                    <th>Target Nodes (Backend Pool)</th>
+                    <th>Purpose</th>
+                </tr>
+                <tr>
+                    <td>6443</td>
+                    <td>TCP</td>
+                    <td>Bootstrap, Masters</td>
+                    <td>Kubernetes API Server</td>
+                </tr>
+                <tr>
+                    <td>22623</td>
+                    <td>TCP</td>
+                    <td>Bootstrap, Masters</td>
+                    <td>Machine Config Server (Ignition delivery)</td>
+                </tr>
+                <tr>
+                    <td>80</td>
+                    <td>TCP</td>
+                    <td>Workers (or Masters if Compact)</td>
+                    <td>HTTP Application Ingress</td>
+                </tr>
+                <tr>
+                    <td>443</td>
+                    <td>TCP</td>
+                    <td>Workers (or Masters if Compact)</td>
+                    <td>HTTPS Application Ingress</td>
+                </tr>
+            </table>
+        </div>
+    </details>
+
+    <details open>
+        <summary>0.2 DNS Records Configuration</summary>
+        <div class="content">
+            <p>You must configure the following A-records in your DNS server. All these records should point to the <strong>IP address of your Load Balancer</strong>.</p>
+            <ul>
+                <li><code>api.&lt;cluster_name&gt;.&lt;base_domain&gt;</code> (Points to LB IP, handles port 6443)</li>
+                <li><code>api-int.&lt;cluster_name&gt;.&lt;base_domain&gt;</code> (Points to LB IP, handles ports 6443 and 22623)</li>
+                <li><code>*.apps.&lt;cluster_name&gt;.&lt;base_domain&gt;</code> (Wildcard pointing to LB IP, handles ports 80/443)</li>
+            </ul>
+        </div>
+    </details>
+
+    <!-- PART 1: SHARED CONFIGURATION -->
+    <div class="section-header">PART 1: Shared Configuration & Modules</div>
+    <p>These files establish the foundation of your deployment, regardless of the cluster size.</p>
+
+    <details>
+        <summary>Step 1: Project Structure & Provider Configuration</summary>
+        <div class="content">
+            <p>Create a directory structure that separates your modules from your root configuration:</p>
+            <pre><code>ocp4-vsphere-upi/
+├── providers.tf       
+├── variables.tf       
+├── terraform.tfvars   
+├── main.tf            
+└── modules/
+    └── ocp_node/      
+        ├── main.tf
+        └── variables.tf</code></pre>
+
+            <h3><code>providers.tf</code></h3>
+            <pre><code>terraform {
+  required_providers {
+    vsphere = {
+      source  = "hashicorp/vsphere"
+      version = "~> 2.15"
+    }
+  }
+}
+
+provider "vsphere" {
+  user                 = var.vsphere_user
+  password             = var.vsphere_password
+  vsphere_server       = var.vsphere_server
+  allow_unverified_ssl = true 
+}</code></pre>
+        </div>
+    </details>
+
+    <details>
+        <summary>Step 2: The Reusable Node Module</summary>
+        <div class="content">
+            <h3><code>modules/ocp_node/variables.tf</code></h3>
+            <pre><code>variable "vm_name" { type = string }
+variable "cpu" { type = number, default = 4 }
+variable "ram_mb" { type = number, default = 16384 }
+variable "disk_size_gb" { type = number, default = 120 }
+variable "resource_pool_id" { type = string }
+variable "datastore_id" { type = string }
+variable "folder_id" { type = string }
+variable "network_id" { type = string }
+variable "rhcos_template_uuid" { type = string }
+variable "ignition_data" { type = string }
+variable "mac_address" { type = string, default = "" }</code></pre>
+
+            <h3><code>modules/ocp_node/main.tf</code></h3>
+            <pre><code>resource "vsphere_virtual_machine" "node" {
+  name             = var.vm_name
+  resource_pool_id = var.resource_pool_id
+  datastore_id     = var.datastore_id
+  folder           = var.folder_id
+
+  num_cpus = var.cpu
+  memory   = var.ram_mb
+  guest_id = "coreos64Guest"
+
+  network_interface {
+    network_id   = var.network_id
+    # Uncomment if using static MAC addresses:
+    # use_static_mac = var.mac_address != "" ? true : false
+    # mac_address    = var.mac_address
+  }
+
+  disk {
+    label            = "disk0"
+    size             = var.disk_size_gb
+    thin_provisioned = true
+  }
+
+  clone {
+    template_uuid = var.rhcos_template_uuid
+  }
+
+  extra_config = {
+    "guestinfo.ignition.config.data"          = var.ignition_data
+    "guestinfo.ignition.config.data.encoding" = "base64"
+  }
+}</code></pre>
+        </div>
+    </details>
+
+    <!-- PART 2: STANDARD CLUSTER -->
+    <div class="section-header">PART 2: Option A - Standard Cluster Topology</div>
+    <p>A standard topology consisting of 1 Bootstrap, 3 Control Plane (Master) nodes, and 2 or more Worker nodes.</p>
+
+    <details>
+        <summary>Standard <code>variables.tf</code></summary>
+        <div class="content">
+            <pre><code># Connection Variables
+variable "vsphere_server"   { type = string }
+variable "vsphere_user"     { type = string }
+variable "vsphere_password" { type = string, sensitive = true }
+
+# Infrastructure Variables
+variable "datacenter_name"     { type = string, default = "Datacenter" }
+variable "cluster_name"        { type = string, default = "Cluster" }
+variable "datastore_name"      { type = string, default = "datastore1" }
+variable "network_name"        { type = string, default = "VM Network" }
+variable "rhcos_template_name" { type = string, default = "rhcos-template" }
+variable "cluster_id"          { type = string, default = "ocp4" }
+
+# Node Sizing
+variable "bootstrap_cpu" { type = number, default = 4 }
+variable "bootstrap_ram" { type = number, default = 16384 }
+variable "master_count"  { type = number, default = 3 }
+variable "master_cpu"    { type = number, default = 4 }
+variable "master_ram"    { type = number, default = 16384 }
+variable "worker_count"  { type = number, default = 2 }
+variable "worker_cpu"    { type = number, default = 4 }
+variable "worker_ram"    { type = number, default = 16384 }
+variable "disk_size"     { type = number, default = 120 }</code></pre>
+        </div>
+    </details>
+
+    <details>
+        <summary>Standard & Compact <code>main.tf</code></summary>
+        <div class="content">
+            <div class="note">This `main.tf` logic is used for BOTH Standard and Compact clusters. It uses `count` loops based on the variables.</div>
+            <pre><code># 1. Fetch vSphere Data Sources
+data "vsphere_datacenter" "dc" { name = var.datacenter_name }
+data "vsphere_compute_cluster" "cluster" { name = var.cluster_name, datacenter_id = data.vsphere_datacenter.dc.id }
+data "vsphere_datastore" "datastore" { name = var.datastore_name, datacenter_id = data.vsphere_datacenter.dc.id }
+data "vsphere_network" "network" { name = var.network_name, datacenter_id = data.vsphere_datacenter.dc.id }
+data "vsphere_virtual_machine" "rhcos_template" { name = var.rhcos_template_name, datacenter_id = data.vsphere_datacenter.dc.id }
+
+# 2. Create a vSphere Folder
+resource "vsphere_folder" "folder" {
+  path          = var.cluster_id
+  type          = "vm"
+  datacenter_id = data.vsphere_datacenter.dc.id
+}
+
+# 3. Read Ignition Files
+data "local_file" "bootstrap_ign" { filename = "${path.module}/install_dir/bootstrap.ign" }
+data "local_file" "master_ign"    { filename = "${path.module}/install_dir/master.ign" }
+data "local_file" "worker_ign"    { filename = "${path.module}/install_dir/worker.ign" }
+
+# 4. Bootstrap Node
+module "bootstrap" {
+  source              = "./modules/ocp_node"
+  vm_name             = "${var.cluster_id}-bootstrap"
+  cpu                 = var.bootstrap_cpu
+  ram_mb              = var.bootstrap_ram
+  disk_size_gb        = var.disk_size
+  resource_pool_id    = data.vsphere_compute_cluster.cluster.resource_pool_id
+  datastore_id        = data.vsphere_datastore.datastore.id
+  folder_id           = vsphere_folder.folder.id
+  network_id          = data.vsphere_network.network.id
+  rhcos_template_uuid = data.vsphere_virtual_machine.rhcos_template.id
+  ignition_data       = base64encode(data.local_file.bootstrap_ign.content)
+}
+
+# 5. Control Plane (Master) Nodes
+module "control_plane" {
+  source              = "./modules/ocp_node"
+  count               = var.master_count
+  vm_name             = "${var.cluster_id}-master-${count.index}"
+  cpu                 = var.master_cpu
+  ram_mb              = var.master_ram
+  disk_size_gb        = var.disk_size
+  resource_pool_id    = data.vsphere_compute_cluster.cluster.resource_pool_id
+  datastore_id        = data.vsphere_datastore.datastore.id
+  folder_id           = vsphere_folder.folder.id
+  network_id          = data.vsphere_network.network.id
+  rhcos_template_uuid = data.vsphere_virtual_machine.rhcos_template.id
+  ignition_data       = base64encode(data.local_file.master_ign.content)
+}
+
+# 6. Worker Nodes
+module "workers" {
+  source              = "./modules/ocp_node"
+  count               = var.worker_count
+  vm_name             = "${var.cluster_id}-worker-${count.index}"
+  cpu                 = var.worker_cpu
+  ram_mb              = var.worker_ram
+  disk_size_gb        = var.disk_size
+  resource_pool_id    = data.vsphere_compute_cluster.cluster.resource_pool_id
+  datastore_id        = data.vsphere_datastore.datastore.id
+  folder_id           = vsphere_folder.folder.id
+  network_id          = data.vsphere_network.network.id
+  rhcos_template_uuid = data.vsphere_virtual_machine.rhcos_template.id
+  ignition_data       = base64encode(data.local_file.worker_ign.content)
+}</code></pre>
+        </div>
+    </details>
+
+    <!-- PART 3: COMPACT CLUSTER -->
+    <div class="section-header">PART 3: Option B - Compact Cluster Topology</div>
+    <p>A minimalist topology ideal for labs. <strong>Worker count is 0</strong>.</p>
+
+    <details>
+        <summary>Compact <code>variables.tf</code></summary>
+        <div class="content">
+            <pre><code># Connection Variables (Same as Standard)
+variable "vsphere_server"   { type = string }
+variable "vsphere_user"     { type = string }
+variable "vsphere_password" { type = string, sensitive = true }
+
+# Infrastructure Variables (Same as Standard)
+variable "datacenter_name"     { type = string, default = "Datacenter" }
+variable "cluster_name"        { type = string, default = "Cluster" }
+variable "datastore_name"      { type = string, default = "datastore1" }
+variable "network_name"        { type = string, default = "VM Network" }
+variable "rhcos_template_name" { type = string, default = "rhcos-template" }
+variable "cluster_id"          { type = string, default = "ocp4-compact" }
+
+# Compact Node Sizing (Workers = 0, Masters are larger)
+variable "bootstrap_cpu" { type = number, default = 4 }
+variable "bootstrap_ram" { type = number, default = 16384 }
+variable "master_count"  { type = number, default = 3 }
+variable "master_cpu"    { type = number, default = 8 }
+variable "master_ram"    { type = number, default = 32768 }
+variable "worker_count"  { type = number, default = 0 } # SET TO ZERO
+variable "worker_cpu"    { type = number, default = 4 }
+variable "worker_ram"    { type = number, default = 8192 }
+variable "disk_size"     { type = number, default = 120 }</code></pre>
+        </div>
+    </details>
+
+    <details>
+        <summary>Compact <code>install-config.yaml</code> Note</summary>
+        <div class="content">
+            <div class="warning">
+                <strong>Crucial Step:</strong> For a compact cluster, modify your <code>install-config.yaml</code> BEFORE generating the Ignition files so the Masters can run workloads:
+                <pre><code>compute:
+- name: worker
+  replicas: 0
+controlPlane:
+  name: master
+  replicas: 3</code></pre>
+            </div>
+        </div>
+    </details>
+
+    <!-- PART 4: EXECUTION -->
+    <div class="section-header">PART 4: Execution & Validation</div>
+    <details>
+        <summary>Step 5: Plan and Apply</summary>
+        <div class="content">
+            <p>Ensure your Ignition files are in the <code>install_dir/</code> directory.</p>
+            <ol>
+                <li>Run <code>terraform init</code></li>
+                <li>Run <code>terraform plan</code></li>
+                <li>Run <code>terraform apply -auto-approve</code></li>
+            </ol>
+            <p>Once installation completes, remove the Bootstrap node from Terraform and your Load Balancer.</p>
+        </div>
+    </details>
+
+    <!-- PART 5: ACCESSING THE CLUSTER -->
+    <div class="section-header">PART 5: Accessing Your Cluster</div>
+    <details>
+        <summary>Step 6: Accessing via CLI and GUI</summary>
+        <div class="content">
+            <h3>1. Command Line Interface (CLI) Access</h3>
+            <pre><code>export KUBECONFIG=/path/to/your/install_dir/auth/kubeconfig
+oc get nodes
+oc get clusteroperators</code></pre>
+
+            <h3>2. Graphical User Interface (GUI) Access</h3>
+            <ul>
+                <li><strong>Console URL:</strong> <code>https://console-openshift-console.apps.&lt;cluster_name&gt;.&lt;base_domain&gt;</code></li>
+                <li><strong>Username:</strong> <code>kubeadmin</code></li>
+                <li><strong>Password:</strong></li>
+            </ul>
+            <pre><code>cat /path/to/your/install_dir/auth/kubeadmin-password</code></pre>
+        </div>
+    </details>
+
+    <!-- JavaScript for Copy Functionality -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            document.querySelectorAll('pre').forEach(function(preBlock) {
+                var btn = document.createElement('button');
+                btn.className = 'copy-btn';
+                btn.textContent = 'Copy';
+                preBlock.appendChild(btn);
+
+                btn.addEventListener('click', function() {
+                    var codeElement = preBlock.querySelector('code');
+                    if(codeElement) {
+                        navigator.clipboard.writeText(codeElement.innerText).then(function() {
+                            btn.textContent = 'Copied!';
+                            btn.classList.add('copied');
+                            setTimeout(function() { 
+                                btn.textContent = 'Copy'; 
+                                btn.classList.remove('copied');
+                            }, 2000);
+                        }).catch(function(err) {
+                            console.error('Failed to copy text: ', err);
+                        });
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html>
