@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>מדריך התקנת OpenShift על AWS - סביבת Linux בלבד</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f9f9f9;
+        }
+        h1 {
+            color: #cc0000;
+            border-bottom: 2px solid #cc0000;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #0056b3;
+            margin-top: 30px;
+        }
+        .step {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        pre {
+            background-color: #272822;
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            direction: ltr;
+            text-align: left;
+        }
+        code {
+            font-family: Consolas, Monaco, 'Andale Mono', monospace;
+        }
+        .note {
+            background-color: #fff3cd;
+            border-left: 4px solid #ffeeba;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        a {
+            color: #0056b3;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>מדריך התקנת OpenShift על AWS (IPI) - גרסת Linux Terminal</h1>
+    <p>מדריך זה מיועד להתקנת Red Hat OpenShift על גבי תשתית AWS באמצעות שיטת Installer-Provisioned Infrastructure (IPI), מתוך סביבת עבודה מבוססת Linux לחלוטין.</p>
+
+    <div class="note">
+        <strong>דרישות קדם:</strong>
+        <ul>
+            <li>גישת Terminal / SSH למכונת Linux (למשל Ubuntu, RHEL או Amazon Linux).</li>
+            <li>חשבון AWS פעיל עם הרשאות Administrator.</li>
+            <li>דומיין (Hosted Zone) מוגדר ב-AWS Route 53.</li>
+            <li>חשבון פעיל ב-Red Hat עם Pull Secret זמין.</li>
+        </ul>
+    </div>
+
+    <div class="step">
+        <h2>שלב 1: הגדרת אישורי AWS (AWS Credentials)</h2>
+        <p>הכלי של OpenShift משתמש ב-AWS CLI כדי לתקשר עם הענן. הגדר את משתני הסביבה (או הגדר את <code>~/.aws/credentials</code>):</p>
+        <pre><code>export AWS_ACCESS_KEY_ID="YOUR_ACCESS_KEY"
+export AWS_SECRET_ACCESS_KEY="YOUR_SECRET_KEY"
+export AWS_DEFAULT_REGION="us-east-1" # שנה לאזור המבוקש</code></pre>
+    </div>
+
+    <div class="step">
+        <h2>שלב 2: הורדת כלי ההתקנה (openshift-install ו-oc)</h2>
+        <p>הורד את הכלים הייעודיים ללינוקס ישירות מהאתר של Red Hat וחלץ אותם לתיקייה מקומית:</p>
+        <pre><code># יצירת תיקיית עבודה
+mkdir ~/openshift-install-dir
+cd ~/openshift-install-dir
+
+# הורדת openshift-install (יש לוודא שימוש בגרסה העדכנית ביותר הנדרשת)
+wget https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-install-linux.tar.gz
+tar -xvf openshift-install-linux.tar.gz
+
+# הורדת כלי הניהול oc CLI
+wget https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-linux.tar.gz
+tar -xvf openshift-client-linux.tar.gz
+
+# הוספת הכלים ל-PATH (אופציונלי אך מומלץ)
+sudo mv oc kubectl openshift-install /usr/local/bin/</code></pre>
+    </div>
+
+    <div class="step">
+        <h2>שלב 3: יצירת מפתח SSH לגישה ל-Nodes</h2>
+        <p>יש לייצר מפתח SSH שישמש אותנו להתחברות לשרתי ה-CoreOS שיוקמו ב-AWS לצורכי דיבוג:</p>
+        <pre><code># יצירת המפתח (ללא סיסמה על מנת להקל על ההתקנה, ניתן לשנות בהתאם למדיניות האבטחה)
+ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_rsa
+
+# הפעלת ה-ssh-agent והוספת המפתח
+eval "$(ssh-agent -s)"
+ssh-add ~/.ssh/id_rsa</code></pre>
+    </div>
+
+    <div class="step">
+        <h2>שלב 4: יצירת קובץ התצורה (install-config.yaml)</h2>
+        <p>בשלב זה נייצר את קובץ הקונפיגורציה. הכלי ישאל אותך מספר שאלות בטרמינל (Cloud Provider, אזור ב-AWS, שם הדומיין ב-Route53, וה-Pull Secret):</p>
+        <pre><code>openshift-install create install-config --dir=~/openshift-install-dir</code></pre>
+        <div class="note">
+            <strong>חשוב:</strong> ניתן לערוך את קובץ ה-<code>install-config.yaml</code> שנוצר בתיקייה בשלב זה אם תרצה לשנות סוגי מכונות (למשל מ-m5.xlarge למשהו אחר) או מספר Worker Nodes. <strong>ברגע שמריצים את ההתקנה, הקובץ נמחק, לכן מומלץ לגבות אותו:</strong>
+            <br><br><code>cp ~/openshift-install-dir/install-config.yaml ~/openshift-install-dir/install-config.yaml.backup</code>
+        </div>
+    </div>
+
+    <div class="step">
+        <h2>שלב 5: הרצת ההתקנה ויצירת הקלאסטר</h2>
+        <p>כעת ניתן להתחיל את הפריסה ב-AWS. התהליך לוקח לרוב בין 30 ל-45 דקות:</p>
+        <pre><code>openshift-install create cluster --dir=~/openshift-install-dir --log-level=info</code></pre>
+        <p>בסיום ההתקנה, יודפסו למסך כתובת ה-Console, שם המשתמש (kubeadmin) והסיסמה הזמנית שלו.</p>
+    </div>
+
+    <div class="step">
+        <h2>שלב 6: התחברות לקלאסטר ואימות</h2>
+        <p>ייצא את משתנה הסביבה כדי להשתמש ב-<code>oc</code> מול הקלאסטר החדש:</p>
+        <pre><code>export KUBECONFIG=~/openshift-install-dir/auth/kubeconfig
+
+# בדיקת מצב ה-Nodes
+oc get nodes
+
+# בדיקת מצב ה-Operators
+oc get clusteroperators</code></pre>
+    </div>
+
+    <div class="step">
+        <h2>מחיקת הקלאסטר (Cleanup)</h2>
+        <p>בסיום העבודה או במקרה של תקלה, ניתן למחוק את כל המשאבים שנוצרו ב-AWS בצורה נקייה על ידי הפקודה:</p>
+        <pre><code>openshift-install destroy cluster --dir=~/openshift-install-dir --log-level=info</code></pre>
+    </div>
+
+</body>
+</html>
