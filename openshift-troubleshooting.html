@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenShift Installation Troubleshooting Log</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #333; max-width: 900px; margin: 0 auto; padding: 20px; }
+        h1 { color: #d35400; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        .error-card { background-color: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px; margin-bottom: 25px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border-left: 5px solid #e74c3c; }
+        .error-title { color: #c0392b; margin-top: 0; }
+        .cause { font-weight: bold; color: #f39c12; margin-top: 15px;}
+        .solution { font-weight: bold; color: #27ae60; margin-top: 15px;}
+        pre { background-color: #f8f9fa; padding: 10px; border-radius: 5px; border: 1px solid #e9ecef; overflow-x: auto; }
+        code { font-family: Consolas, Monaco, monospace; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+
+    <h1>Installation Troubleshooting Log</h1>
+    <p>A chronological record of all errors encountered during the AWS IPI deployment and their architect-level resolutions.</p>
+
+    <div class="error-card">
+        <h3 class="error-title">Error 1: Installer Hangs Indefinitely at "INFO Credentials loaded..."</h3>
+        <p><strong>Symptom:</strong> The <code>create install-config</code> wizard froze immediately after loading AWS credentials and failed to prompt for the platform selection.</p>
+        <p class="cause">Root Cause:</p>
+        <p>The <code>~/.aws/credentials</code> file contained an expired temporary session token (<code>aws_session_token</code>). The AWS API requests timed out because the temporary credentials were no longer valid.</p>
+        <p class="solution">Resolution:</p>
+        <p>Edited the <code>~/.aws/credentials</code> file using <code>nano</code> and manually deleted the expired session token line.</p>
+    </div>
+
+    <div class="error-card">
+        <h3 class="error-title">Error 2: Incompatible Credentials Mode (Mint vs Passthrough)</h3>
+        <p><strong>Symptom:</strong> During <code>create cluster</code>, the installer threw a FATAL error: <code>AWS credentials... are not valid for default credentials mode</code> (and later failed for Passthrough mode as well).</p>
+        <p class="cause">Root Cause:</p>
+        <p>OpenShift strictly prohibits the use of temporary AWS credentials (keys with session tokens) for automated deployments. Temporary keys expire within hours, which would cause the cluster to permanently lose its ability to manage storage and scale nodes.</p>
+        <p class="solution">Resolution:</p>
+        <p>Created a dedicated IAM User in the AWS Console with the <code>AdministratorAccess</code> policy. Generated Long-Term Credentials (Access Key ID and Secret Access Key only, without a session token) and updated the Linux VM's configuration.</p>
+    </div>
+
+    <div class="error-card">
+        <h3 class="error-title">Error 3: AWS CLI "Unable to parse config file"</h3>
+        <p><strong>Symptom:</strong> Running <code>aws configure</code> resulted in a parsing error for the credentials file.</p>
+        <p class="cause">Root Cause:</p>
+        <p>Manual edits to <code>~/.aws/credentials</code> corrupted the strict INI file formatting (likely deleting the <code>[default]</code> header).</p>
+        <p class="solution">Resolution:</p>
+        <p>Moved the corrupted file out of the way (<code>mv ~/.aws/credentials ~/.aws/credentials.broken</code>) and re-ran <code>aws configure</code> to cleanly generate a properly formatted file from scratch.</p>
+    </div>
+
+    <div class="error-card">
+        <h3 class="error-title">Error 4: Network Timeout & AddressLimitExceeded</h3>
+        <p><strong>Symptom:</strong> The installer timed out after 15 minutes during the network phase. Logs showed: <code>api error AddressLimitExceeded: The maximum number of addresses has been reached.</code></p>
+        <p class="cause">Root Cause:</p>
+        <p>The installer attempts to build a highly available Multi-AZ architecture, requesting 3 Elastic IPs for 3 NAT Gateways. The AWS account had a default Service Quota limit of 5 Elastic IPs per region, and existing allocations pushed the request over the limit.</p>
+        <p class="solution">Resolution:</p>
+        <p>1. Executed <code>./openshift-install destroy cluster</code> to clean up the partially built VPC.<br>
+           2. Accessed the AWS EC2 Console and released unused Elastic IPs to ensure at least 3 were available.<br>
+           3. Wiped the <code>ocp-install</code> directory, restored the clean <code>install-config.yaml</code>, and restarted the build.</p>
+    </div>
+
+    <div class="error-card">
+        <h3 class="error-title">Error 5: OpenShift CLI GLIBC Version Mismatch</h3>
+        <p><strong>Symptom:</strong> Running <code>oc get nodes</code> on the Linux VM returned: <code>version 'GLIBC_2.34' not found (required by oc)</code>.</p>
+        <p class="cause">Root Cause:</p>
+        <p>The latest <code>oc</code> Linux binary was compiled against a newer version of the GNU C Library than what was installed on the Amazon Linux 2 Bastion host.</p>
+        <p class="solution">Resolution:</p>
+        <p>Pivoted to a local administration model. Copied the generated <code>kubeconfig</code> file from the Linux VM to a local Windows workstation, downloaded the native Windows <code>oc.exe</code>, and set the local <code>KUBECONFIG</code> environment variable.</p>
+    </div>
+
+</body>
+</html>

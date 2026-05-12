@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenShift IPI Installation on AWS - Step-by-Step</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #333; max-width: 900px; margin: 0 auto; padding: 20px; }
+        h1 { color: #cc0000; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        h2 { color: #2c3e50; margin-top: 30px; }
+        h3 { color: #34495e; }
+        pre { background-color: #f8f9fa; padding: 15px; border-radius: 5px; overflow-x: auto; border: 1px solid #e9ecef; }
+        code { font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace; color: #e83e8c; }
+        pre code { color: #212529; }
+        .note { background-color: #e7f3fe; border-left: 6px solid #2196F3; padding: 10px 15px; margin: 15px 0; }
+    </style>
+</head>
+<body>
+
+    <h1>OpenShift 4 Installation Guide (AWS IPI Method)</h1>
+    <p>This guide details the complete process for deploying a self-managed OpenShift Container Platform on AWS using the Installer Provisioned Infrastructure (IPI) method, triggered from a dedicated Linux Bastion host.</p>
+
+    <h2>Prerequisites</h2>
+    <ul>
+        <li>A dedicated Linux VM (EC2 instance) running in AWS.</li>
+        <li>AWS IAM User with <strong>AdministratorAccess</strong> and <strong>Long-Term Credentials</strong> (Access Key ID & Secret Access Key).</li>
+        <li>A registered Public Domain in AWS Route 53 (Public Hosted Zone).</li>
+        <li>A Red Hat Developer account.</li>
+        <li>Minimum 3 available Elastic IPs in your target AWS region.</li>
+    </ul>
+
+    <h2>Step 1: Prepare the Linux Bastion Host</h2>
+    <p>Connect to your Linux VM via SSH and set up the required authentication.</p>
+    
+    <h3>1.1 Configure AWS CLI</h3>
+    <pre><code>aws configure</code></pre>
+    <p>Provide your Long-Term Access Key ID, Secret Access Key, target region (e.g., <code>us-east-1</code>), and output format (<code>json</code>).</p>
+
+    <h3>1.2 Generate and Load SSH Key</h3>
+    <p>This key is injected into the cluster nodes for debugging access.</p>
+    <pre><code>ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519
+eval "$(ssh-agent -s)"
+ssh-add ~/.ssh/id_ed25519</code></pre>
+
+    <h2>Step 2: Download Binaries and Pull Secret</h2>
+    <h3>2.1 Create Workspace and Download Tools</h3>
+    <pre><code>mkdir ~/openshift-cluster
+cd ~/openshift-cluster
+wget https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-install-linux.tar.gz
+tar -xvf openshift-install-linux.tar.gz</code></pre>
+
+    <h3>2.2 Save the Pull Secret</h3>
+    <p>Obtain your pull secret from the <a href="https://console.redhat.com/openshift/create/aws">Red Hat Hybrid Cloud Console</a>.</p>
+    <pre><code>nano pull-secret.txt</code></pre>
+    <p>Paste the JSON token, save, and exit (<code>Ctrl+O</code>, <code>Enter</code>, <code>Ctrl+X</code>).</p>
+
+    <h2>Step 3: Generate the Cluster Configuration</h2>
+    <h3>3.1 Run the Interactive Wizard</h3>
+    <pre><code>mkdir ocp-install
+cat pull-secret.txt # Copy the output to your clipboard
+./openshift-install create install-config --dir=ocp-install</code></pre>
+    <p>Answer the prompts:</p>
+    <ul>
+        <li><strong>SSH Public Key:</strong> <code>/home/ec2-user/.ssh/id_ed25519.pub</code></li>
+        <li><strong>Platform:</strong> <code>aws</code></li>
+        <li><strong>Region:</strong> <code>us-east-1</code></li>
+        <li><strong>Base Domain:</strong> Select your Route 53 domain.</li>
+        <li><strong>Cluster Name:</strong> e.g., <code>rad-os</code></li>
+        <li><strong>Pull Secret:</strong> Paste the copied JSON string.</li>
+    </ul>
+
+    <h3>3.2 Backup the Configuration (Crucial)</h3>
+    <div class="note"><strong>Architect's Note:</strong> The installer consumes and deletes the configuration file during installation. Always create a backup.</div>
+    <pre><code>cp ocp-install/install-config.yaml ./install-config-clean.yaml</code></pre>
+
+    <h2>Step 4: Deploy the Cluster</h2>
+    <p>Execute the final build command. The automated process takes approximately 40-45 minutes.</p>
+    <pre><code>./openshift-install create cluster --dir=ocp-install --log-level=info</code></pre>
+    <p>Once complete, the terminal will output the Web Console URL and the <code>kubeadmin</code> credentials.</p>
+
+    <h2>Step 5: Post-Installation Local Client Setup (Windows)</h2>
+    <p>If your Linux VM has incompatible C libraries (e.g., glibc errors), manage the cluster locally from your Windows machine.</p>
+    <ol>
+        <li>Print the kubeconfig on the Linux VM: <code>cat ~/openshift-cluster/ocp-install/auth/kubeconfig</code></li>
+        <li>Copy the output and save it locally on Windows (e.g., <code>C:\OpenShift\kubeconfig</code>).</li>
+        <li>Download the Windows <code>oc.exe</code> client from the OpenShift mirror.</li>
+        <li>Open Command Prompt and set the environment variable: <code>set KUBECONFIG=C:\OpenShift\kubeconfig</code></li>
+        <li>Verify access: <code>oc get nodes</code></li>
+    </ol>
+
+</body>
+</html>
